@@ -1,0 +1,8 @@
+paths:
+  contracts: contracts/
+  artifacts: artifacts/
+
+networks:
+  localnet: {}
+  studionet: {}
+  testnet_bradbury: {}
