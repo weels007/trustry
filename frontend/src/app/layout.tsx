@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Instrument_Serif, Inter_Tight } from "next/font/google";
 
 import { SiteFooter } from "@/components/trustry/site-footer";
@@ -35,6 +35,20 @@ export const metadata: Metadata = {
   title: "Trustry — an AI notary for facts that happen online",
   description:
     "Trustry attests that a claim about the real world is true. Independent AI validators fetch the source, judge the page, and agree on a record that anyone can check.",
+  applicationName: "Trustry",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon.png", sizes: "32x32", type: "image/png" },
+    ],
+    apple: "/apple-icon.png",
+  },
+};
+
+/** The browser chrome is the same ground the favicon sits on. */
+export const viewport: Viewport = {
+  themeColor: "#07080b",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
