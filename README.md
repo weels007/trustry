@@ -160,19 +160,28 @@ python test_escrow_studionet.py # the escrow, with on-chain balances
 ```
 
 ---
-
 ## Deploying
 
 ### The interface to Vercel
 
-The interface lives in `frontend/`, so set **Root Directory = `frontend`** when creating the
-project, or let the `vercel.json` at the root point the build there.
+Set **Root Directory = `frontend`** in the project settings. Vercel then builds
+inside that directory, which is what the `vercel.json` there is written for.
 
-No environment variables are needed. The interface reads the contract from the browser through
-`gen_call` against the studio RPC, so there is no API key on the server.
+Do not set the Root Directory to the repository root. Vercel would look for a
+Next.js app in the root, where there is none, and the build would fail.
 
-To point at a different contract, change `TRUSTRY_CONTRACT` in
-`frontend/src/lib/genlayer/chain.ts`.
+**No environment variables are required.** The interface reads the contract from
+the browser through `gen_call` against the studio RPC, so there is no API key on
+the server, and the studio RPC allows any origin.
+
+They are available if the contract moves or a different node is wanted, in
+`frontend/.env.example`:
+
+| Variable | Default |
+|---|---|
+| `NEXT_PUBLIC_GENLAYER_RPC_URL` | `https://studio.genlayer.com/api` |
+| `NEXT_PUBLIC_TRUSTRY_CONTRACT` | `0xd71227403E81BcDC4f0Fa657661687D2773333B0` |
+| `NEXT_PUBLIC_GENLAYER_EXPLORER_URL` | `https://explorer-studio.genlayer.com` |
 
 ### The contract to the studio network
 
@@ -180,11 +189,11 @@ To point at a different contract, change `TRUSTRY_CONTRACT` in
 python "D:\Genlayer-project\weels\wallet\deploy.py" --contract contracts/trustry.py --wallet tester1
 ```
 
-The ordinary `genlayer` CLI cannot be used here: it reads the keystore password with
-`inquirer`, which needs a real terminal, so it cannot be piped.
+The ordinary `genlayer` CLI cannot be used here: it reads the keystore password
+with `inquirer`, which needs a real terminal, so it cannot be piped.
 
-The wallets live outside this repository on purpose, and `.gitignore` blocks `*.keystore.json`,
-`*.password` and `.env` as a second line of defence.
+The wallets live outside this repository on purpose, and `.gitignore` blocks
+`*.keystore.json`, `*.password` and `.env` as a second line of defence.
 
 ---
 
