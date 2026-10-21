@@ -1,178 +1,235 @@
-# Trustry — GenLayer Intelligent Contract (AI Notary)
+# Trustry
 
-Proyek **Trustry** membangun layanan AI Notary otomatis di GenLayer, menggunakan konsensus AI-validator untuk memverifikasi kejadian online melalui sumber URL terpercaya.
+An AI notary on GenLayer. It attests claims about the real world: independent AI validators
+fetch the page you point at, judge it on their own, and agree on a record that anyone can
+check afterwards.
 
-## Menjalankan
+The repository holds the intelligent contract and the interface that goes with it.
 
-```bash
-# Kontrak
-genvm-lint check contracts/trustry.py
-pytest tests/direct/ -v
-
-# Frontend
-cd frontend
-npm install
-npm run dev
-```
-
-## Deploy ke Vercel
-
-Repositori ini berisi kontrak dan frontend. Frontend-nya ada di `frontend/`, jadi
-pilih **Root Directory = `frontend`** saat membuat project di Vercel, atau
-biarkan `vercel.json` di root yang mengarahkan build ke sana.
-
-Tidak ada environment variable yang dibutuhkan. Frontend membaca kontrak
-langsung dari browser lewat `gen_call` ke RPC studio, jadi tidak ada API key
-yang disimpan di server.
-
-Untuk mengganti kontrak, ubah `TRUSTRY_CONTRACT` di `frontend/src/lib/genlayer/chain.ts`.
-
-## Deploy kontrak ke studionet
-
-```bash
-python "D:\Genlayer-project\weels\wallet\deploy.py" --contract contracts/trustry.py --wallet tester1
-```
-
-CLI `genlayer` biasa tidak bisa dipakai di sini: ia membaca password keystore
-dengan `inquirer`, yang butuh terminal sungguhan, jadi tidak bisa di-pipe.
-
-## Struktur Proyek
-
-```
-ai-notary/
-  agent.md                 # Panduan dan aturan agent (selalu baca doc GenLayer)
-  contracts/
-    trustry.py            # Intelligent Contract Trustry
-  tests/
-    direct/
-      test_ai_notary.py     # Tes langsung (fast, ~30ms) — 24 passed
-    integration/
-      test_ai_notary.py     # Tes integrasi (konsensus penuh, real web/LLM)
-  test_studionet.py         # Test semua method di studionet asli — 30 passed
-  test_escrow_studionet.py  # Test escrow + pergerakan saldo on-chain — 25 passed
-  gltest.config.yaml        # Konfigurasi jaringan gltest
-```
-
-## Status di Studionet
-
-| Item | Nilai |
+| | |
 |---|---|
-| Contract address | `0xcf2Ae53f11116Fbf0121990678E4DB513f44dd8d` |
-| Jaringan | Genlayer Studio Network (chain 61999) |
-| Wallet | `tester1` (folder `D:\Genlayer-project\weels\wallet`) |
-| Lint GenVM | OK — 15 method (9 view, 6 write) |
-| Direct test | 46 passed (33 perilaku + 13 security regression) |
-| Studionet test | 39 passed |
-| Escrow test | 31 passed |
+| Contract (studio network) | `0xd71227403E81BcDC4f0Fa657661687D2773333B0` |
+| Network | Genlayer Studio Network, chain 61999 |
+| Contract methods | 15, of which 9 are reads |
+| Direct tests | 48 passed |
+| Studio network tests | 39 passed |
+| Escrow tests | 31 passed |
 
-## API Kontrak
+---
+
+## What it does
+
+A claim is opened against a source page. Validators read the page independently and decide
+whether it actually reports the event. When they agree, a record is written on chain with the
+exact words from the page that carried the proof.
+
+Three deterministic layers sit underneath the model's judgement, so the model can be wrong
+about meaning but not about facts:
+
+1. **The wording has to be on the page.** The claim carries the phrasing it requires, and
+   that phrasing has to occur in the fetched text. A page cannot talk its way into proving
+   something it does not contain.
+2. **The title has to be a phrase from the page.** A reported headline that appears nowhere
+   in the source is dropped.
+3. **The proof has to be quotable.** Every validator hands back the sentence it relied on,
+   and the contract checks that sentence against the page. Evidence that was made up cannot
+   seal a record.
+
+The model still does the judging. That semantic call is the whole point of GenLayer, and it is
+made separately by each validator, each on its own copy of the page.
+
+---
+
+## The contract
 
 ```
-open_case(event_id, description, evidence_url, expected_event_title)  # belum payable
-fund_escrow(event_id)                                                # payable, tidak pernah gagal
-notarize(event_id)                                                   # consensus, belum payable
-appeal_notarization(event_id)                                        # evaluasi ulang
-release_escrow(event_id, recipient) / refund_escrow(event_id)         # pemindahan dana
+open_case(event_id, description, evidence_url, expected_event_title)   # not payable
+fund_escrow(event_id)                                                  # payable, never rejects
+notarize(event_id)                                                     # consensus, not payable
+appeal_notarization(event_id)                                          # judged again from scratch
+release_escrow(event_id, recipient) / refund_escrow(event_id)           # moves the GEN
 ```
 
 Reads: `get_record`, `get_frontend_details`, `get_all_record_ids`, `get_escrow_status`,
 `get_escrow_pool`, `get_event_count`, `get_total_escrow_held`, `get_contract_balance`,
 `is_trusted_domain`.
 
-## Escrow (dana benar-benar berpindah, tidak pernah terperangkap)
+### The escrow cannot trap anyone's money
 
-`fund_escrow` (payable) menahan GEN; `release_escrow` memindahkan ke penerima, `refund_escrow`
-mengembalikan ke submitter. Status escrow dilacak eksplisit (`none` / `held` / `released` /
-`refunded`) supaya dana tidak bisa dilepas dua kali.
+A transaction that fails is still credited with its value. The storage is rolled back, but the
+GEN is not returned, so it would sit in the contract with no record to refund it from. That is
+why funding is a transaction of its own and the risky step carries no value:
 
-**Penting:** transaksi yang GAGAL tetap dikreditkan dengan nilainya (`value_credited: True`),
-sementara storage di-rollback — dananya hilang tanpa jejak. Karena itu pem-fundingan dipisahkan
-dari langkah berisiko: `open_case` dan `notarize` tidak pernah membawa nilai, dan `fund_escrow`
-tidak punya pemeriksaan yang bisa menolak, sehingga nilainya selalu tercatat dan selalu bisa
-dikembalikan.
+- `open_case` and `notarize` are not payable. They do the web fetch and the model call, they
+  can fail, and they hold no funds.
+- `fund_escrow` is the only payable method and it has no check that can raise. If the case does
+  not exist it creates one, so the value is always recorded and always refundable.
 
-`test_escrow_studionet.py` membuktikan perpindahan dana dengan membaca saldo on-chain
-depositor, penerima, dan kontrak sebelum/sesudah setiap langkah, serta memverifikasi invarian
-`saldo kontrak == total escrow yang dipegang`.
+The owner of the contract has no override over anybody's escrow. Only the depositor can move
+the money. The owner may trigger a refund, but the funds always go back to the depositor.
 
-## Keamanan
+The escrow status is tracked explicitly (`none`, `held`, `released`, `refunded`), so the same
+money can never be released twice. `test_escrow_studionet.py` proves the movement by reading
+the on-chain balance of the depositor, the recipient and the contract before and after every
+step, and checks the invariant that the contract's balance equals the escrow it is holding.
 
-- **Ground truth deterministik**: frasa kunci wajib benar-benar ada di halaman yang di-fetch.
-  LLM hanya menilai apakah halaman mendeskripsikan event, dan tidak pernah bisa membuat kontrak
-  menerima halaman yang tidak memuat bukti.
-- **Title tidak boleh dikarang**: judul yang dilaporkan harus frasa yang ada di halaman.
-- **Bukti harus bisa dikutip**: validator harus mengembalikan kalimat yang persis ada di
-  halaman, dan kontrak memeriksanya. Bukti yang dikarang tidak bisa menyegel record.
-- **Satu halaman = satu event**: URL dinormalisasi (scheme, case host, query, fragment) dan
-  direservasi.
-- **Batas event per alamat** (25) agar satu alamat tidak bisa membanjiri kontrak.
-- **Owner tidak punya hak atas escrow orang lain** — hanya depositor yang bisa memindahkan dana.
-- **Case yang ditolak bisa di-appeal** dan dinilai ulang dari nol.
-- **Input dibatasi** dan halaman ditandai sebagai data tak tepercaya (prompt injection).
+### What a record holds
 
-## Frontend (`frontend/`)
+The claim, the source page, the sentence from that page that carried the proof, the verdict,
+how the validators voted, where the deposit ended up, and how many times the case was judged
+again. A verdict on its own is worth very little, so the reasoning is stored next to it.
 
-Next.js 16 (App Router) + React 19 + Tailwind v4 + shadcn + TypeScript + viem.
+---
 
-| Halaman | Isi |
+## The interface
+
+Next.js 16, React 19, Tailwind v4, shadcn, TypeScript, viem.
+
+| Page | What it holds |
 |---|---|
-| `/` | Hero dengan animasi konvergensi validator, tiga langkah, jaminan keamanan |
-| `/notarize` | Alur tiga transaksi: buka case → dana escrow → notaris, dengan panel konsensus |
-| `/records` | Register semua record, dibaca langsung dari kontrak |
-| `/how-it-works` | Cara konsensus bekerja dan di mana bisa gagal |
+| `/` | The overview, with the convergence of the validators as the hero |
+| `/notarize` | The three transaction flow, with the consensus panel |
+| `/records` | The register, read straight from the contract |
+| `/how-it-works` | How the consensus works and where it can go wrong |
 
-**Menyambung ke kontrak**
+The design reads like an archive of record. Three faces, three voices: Instrument Serif for
+anything the record says, Inter Tight for the interface, IBM Plex Mono for anything that is a
+measurement. One saturated colour, the wax red of a notary's seal. The seal is the element
+that carries state: the ring fills as the validators agree, and the wax red only appears once
+the record is attested.
 
-- **Baca** memakai `gen_call` lewat `fetch` biasa — tidak butuh wallet.
-- **Tulis** mengirim transaksi EVM ke *consensus main contract*, yang meneruskannya ke kontrak
-  Intelligent untuk menjalankan satu ronde konsensus.
-- GenLayer tidak memakai ABI EVM untuk pemanggilan kontrak. Ada codec sendiri
-  (`src/lib/genlayer/calldata.ts` + `rlp.ts`) yang diverifikasi **byte per byte** terhadap
-  SDK Python.
+### Talking to the contract
 
-**Wallet connect (MetaMask + Rabby)**
+- **Reads** go through `gen_call` over plain `fetch`. No wallet is needed.
+- **Writes** are an EVM transaction to the *consensus main contract*, which forwards the call
+  to the intelligent contract and runs a consensus round.
+- GenLayer does **not** use the EVM ABI for contract calls. It has its own compact encoding and
+  the arguments travel inside an RLP list. `src/lib/genlayer/calldata.ts` and `rlp.ts` are a
+  faithful port, checked **byte for byte** against the Python SDK.
 
-Ketika keduanya terpasang, mereka berebut `window.ethereum`. Trustry mencari *semua* provider
-yang ter-inject, menampilkannya di sebuah pemilih, lalu hanya meminta izin ke wallet yang
-dipilih — jadi **tidak ada dua popup yang berebut**. `eth_accounts` dipakai untuk memulihkan
-sesi tanpa popup sama sekali.
+### Connecting a wallet
 
-**Verifikasi** (`npm run verify` di `frontend/`)
+MetaMask and Rabby both inject into `window.ethereum`, and when both are installed they fight
+over it. Trustry finds every injected provider, offers a choice, and then asks only the wallet
+that was picked for permission, so **two popups never compete**. `eth_accounts` restores a
+session without opening anything at all.
 
-| Perintah | Yang diperiksa |
+Rabby also replaces `window.ethereum` with its own provider, which hides MetaMask from
+anything that only reads the live global. An early capture in the document head keeps hold of
+every provider it can see, and the detection reads the live global, the `providers` array and
+that capture together.
+
+---
+
+## Running it
+
+```bash
+# The contract
+genvm-lint check contracts/trustry.py
+pytest tests/direct/ -v
+
+# The interface
+cd frontend
+npm install
+npm run dev
+```
+
+### Verification
+
+```bash
+cd frontend
+npm run verify
+```
+
+| Command | What it checks |
 |---|---|
-| `verify:calldata` | Codec TypeScript vs byte dari SDK Python |
-| `verify:write` | Data transaksi yang ditandatangani wallet vs SDK Python |
-| `verify:wallet` | Deteksi wallet, termasuk MetaMask + Rabby bersamaan |
-| `verify:wallet-ui` | Browser sungguhan dengan dua wallet palsu: hanya wallet yang dipilih yang diminta izin |
-| `verify:read` | Baca dari kontrak sungguhan |
+| `verify:calldata` | The TypeScript calldata codec against the bytes the Python SDK produces |
+| `verify:write` | The transaction data the wallet signs, against the Python SDK |
+| `verify:wallet` | Wallet detection, including MetaMask and Rabby installed together |
+| `verify:wallet-ui` | A real browser with both wallets faked, checking only the picked one is asked |
+| `verify:read` | A read against the live contract |
 
-## Fitur Utama (Web3-Ready)
+The ground truth for the first two lives in `calldata_ground_truth.json` and
+`write_ground_truth.json`, produced by the Python scripts beside them.
 
-1. **Verifikasi Event Online** — Kontrak mengambil bukti dari URL terpercaya, menjalankan LLM untuk menganalisis konten, dan menyimpan hasil verifikasi on-chain.
-2. **Sumber Terpercaya (Trusted Domains)** — Hanya domain yang dapat dipertanggungjawabkan (misalnya `.org`, `.edu`, situs berita resmi, GitHub, Ethereum) yang diterima sebagai bukti.
-3. **Konsensus Validator** — Menggunakan `run_nondet_unsafe` dengan validator independen yang menjalankan ulang web fetch dan LLM, membandingkan `verified` dan `event_title`. Bukan hanya validasi format JSON.
-4. **Escrow Opsional** — Metode `payable` (`notarize`) menerima GEN sebagai jaminan; `release_escrow` dapat melepaskan jika event terverifikasi.
-5. **Audit Trail** — Semua record (`NotaryRecord`) tersimpan persisten dengan `event_id`, URL bukti, domain, status verifikasi, dan pengirim.
+### The studio network, end to end
 
-## Prinsip Kesetaraan (Equivalence Principle)
+```bash
+python test_studionet.py        # every read and write method, real web and model calls
+python test_escrow_studionet.py # the escrow, with on-chain balances
+```
 
-Karena web dan LLM bersifat non-deterministik, kontrak menggunakan **custom validator function** (`run_nondet_unsafe`):
-- **Leader**: Fetch URL + LLM → JSON hasil.
-- **Validator**: Rerun fetch + LLM → bandingkan `verified` (bool), `event_title` (string stabil), dan `evidence_url` (harus sama persis).
-- Jika tidak cocok, konsensus gagal dan rotasi validator terjadi.
+---
 
-## Aturan Agent
+## Deploying
 
-Lihat `agent.md`. Intinya:
-- Selalu baca dokumentasi GenLayer (`https://docs.genlayer.com/`) sebelum mengambil keputusan desain.
-- Selalu pin versi runner konkret (`py-genlayer:...hash...`), tidak pernah `test` atau `latest`.
-- Selalu gunakan `run_nondet_unsafe` dengan verifikasi independen, bukan `strict_eq` untuk LLM/web.
-- Jangan deploy ke `studionet` tanpa konfirmasi pengguna.
-- Selalu perbarui `agent.md` jika instruksi baru diterima.
+### The interface to Vercel
 
-## Catatan Desain
+The interface lives in `frontend/`, so set **Root Directory = `frontend`** when creating the
+project, or let the `vercel.json` at the root point the build there.
 
-- **Tema Notary AI**: Kontrak bertindak sebagai notaris digital yang dapat memverifikasi pernyataan atau kejadian online menggunakan bukti dari situs tepercaya.
-- **Web3 Integration**: Hasil verifikasi tersimpan sebagai state kontrak yang bisa dibaca oleh dApp/Web3 agent lain; escrow memungkinkan model pembayaran berbasis verifikasi.
-- **Tidak Deploy Sekarang**: Struktur kontrak sudah lengkap untuk lint dan direct test, tapi belum dideploy ke `studionet` atau `localnet`.
+No environment variables are needed. The interface reads the contract from the browser through
+`gen_call` against the studio RPC, so there is no API key on the server.
+
+To point at a different contract, change `TRUSTRY_CONTRACT` in
+`frontend/src/lib/genlayer/chain.ts`.
+
+### The contract to the studio network
+
+```bash
+python "D:\Genlayer-project\weels\wallet\deploy.py" --contract contracts/trustry.py --wallet tester1
+```
+
+The ordinary `genlayer` CLI cannot be used here: it reads the keystore password with
+`inquirer`, which needs a real terminal, so it cannot be piped.
+
+The wallets live outside this repository on purpose, and `.gitignore` blocks `*.keystore.json`,
+`*.password` and `.env` as a second line of defence.
+
+---
+
+## Project layout
+
+```
+trustry/
+  agent.md                    # the rules, and everything learned the hard way
+  contracts/
+    trustry.py                # the intelligent contract
+  tests/
+    direct/                   # fast, in memory
+      test_ai_notary.py       # behaviour
+      test_security_audit.py  # the protections, locked in
+    integration/              # full consensus against a real network
+  frontend/
+    src/
+      app/                    # the four pages
+      components/trustry/     # wallet picker, consensus panel, the seal
+      components/ui/          # the flow, and the shadcn parts
+      hooks/use-wallet.tsx
+      lib/genlayer/           # calldata, rlp, client, chain settings
+      lib/wallet.ts           # wallet discovery
+    scripts/                  # the verification suite
+  test_studionet.py
+  test_escrow_studionet.py
+  gltest.config.yaml
+  vercel.json
+```
+
+---
+
+## Notes for anyone changing this
+
+`agent.md` holds the rules and the findings. The short version:
+
+- Read the GenLayer documentation at `https://docs.genlayer.com/` before changing a design.
+- Pin a concrete GenVM runner version. `test` and `latest` are rejected by every network.
+- Use `run_nondet_unsafe` with independent verification. `strict_eq` never works against a
+  model or a live page.
+- The type and the length share one uleb128 value in the calldata. A separate length byte
+  changes every byte after it.
+- An address argument has to be encoded as an address, not as a hex string. A string reaches
+  the contract as a string and the contract then traps.
+- `ACCEPTED` and `FINALIZED` are lifecycle states, not proof that the contract ran. Read
+  `execution_result` out of the leader receipt.
+- Read state only after the transaction is finalized, and with the `latest-final` variant.
+- The studio host returns 502 now and then. Retry the receipt wait and the read.
