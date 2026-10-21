@@ -30,6 +30,8 @@ shots/
 artifacts/
 .gltest_cache/
 coverage/
+localnet-deployment.json
+glsim.log
 
 # Editors and system
 .vscode/

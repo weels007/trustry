@@ -14,7 +14,7 @@ from genlayer_py import create_client, studionet
 from genlayer_py.types import CalldataAddress as Address, TransactionStatus
 
 WALLET_DIR = Path(r"D:\Genlayer-project\weels\wallet")
-CONTRACT = "0xd71227403E81BcDC4f0Fa657661687D2773333B0"
+CONTRACT = "0xf322db27dceD1AF28Db33756dff7f4D99205dA98"
 ESCROW_WEI = 10 ** 16  # 0.01 GEN
 
 CANDIDATES = [

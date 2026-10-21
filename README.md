@@ -8,12 +8,14 @@ The repository holds the intelligent contract and the interface that goes with i
 
 | | |
 |---|---|
-| Contract (studio network) | `0xd71227403E81BcDC4f0Fa657661687D2773333B0` |
+| Contract (studio network) | `0xf322db27dceD1AF28Db33756dff7f4D99205dA98` |
 | Network | Genlayer Studio Network, chain 61999 |
 | Contract methods | 15, of which 9 are reads |
 | Direct tests | 48 passed |
 | Studio network tests | 39 passed |
 | Escrow tests | 31 passed |
+| Local node integration | 24 passed |
+| Interface checks | 6 suites, all passed |
 
 ---
 
@@ -147,10 +149,33 @@ npm run verify
 | `verify:write` | The transaction data the wallet signs, against the Python SDK |
 | `verify:wallet` | Wallet detection, including MetaMask and Rabby installed together |
 | `verify:wallet-ui` | A real browser with both wallets faked, checking only the picked one is asked |
-| `verify:read` | A read against the live contract |
+| `verify:client` | That the client reads the answers of both networks |
+| `verify:schema` | The interface against the contract, using the GenVM linter's own schema |
 
 The ground truth for the first two lives in `calldata_ground_truth.json` and
 `write_ground_truth.json`, produced by the Python scripts beside them.
+
+### Against a local node, without touching the studio network
+
+`glsim` is a local GenLayer network. It runs the contract for real, with a real
+consensus round, so the whole stack can be exercised with nothing going to the
+public network.
+
+```bash
+python run_localnet_test.py
+```
+
+It starts a fresh node, deploys the contract to it, and then drives the whole
+flow through the interface's own client: the calldata encoding, the
+transaction to the consensus contract, the wait for the consensus round, and
+the reads that come back. The page and the model are mocked, so every run is
+the same.
+
+Two things the local node cannot do, and where they are covered instead:
+it does not hand a transaction value to a contract, so the escrow balance is
+proved on the studio network, where the balances are actually read. And its
+SDK re-encodes an address argument in a way the runtime does not take, so
+calls with an address argument fail there.
 
 ### The studio network, end to end
 
@@ -158,6 +183,9 @@ The ground truth for the first two lives in `calldata_ground_truth.json` and
 python test_studionet.py        # every read and write method, real web and model calls
 python test_escrow_studionet.py # the escrow, with on-chain balances
 ```
+
+The studio network allows 500 requests an hour, so a long run can hit that
+limit.
 
 ---
 ## Deploying
@@ -180,7 +208,7 @@ They are available if the contract moves or a different node is wanted, in
 | Variable | Default |
 |---|---|
 | `NEXT_PUBLIC_GENLAYER_RPC_URL` | `https://studio.genlayer.com/api` |
-| `NEXT_PUBLIC_TRUSTRY_CONTRACT` | `0xd71227403E81BcDC4f0Fa657661687D2773333B0` |
+| `NEXT_PUBLIC_TRUSTRY_CONTRACT` | `0xf322db27dceD1AF28Db33756dff7f4D99205dA98` |
 | `NEXT_PUBLIC_GENLAYER_EXPLORER_URL` | `https://explorer-studio.genlayer.com` |
 
 ### The contract to the studio network

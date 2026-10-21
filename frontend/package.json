@@ -11,9 +11,13 @@
     "verify:write": "tsx scripts/verify-write.ts",
     "verify:wallet": "tsx scripts/verify-wallet.ts",
     "verify:wallet-ui": "tsx scripts/verify-wallet-ui.ts",
+    "verify:client": "tsx scripts/verify-client.ts",
+    "verify:schema": "tsx scripts/verify-contract-schema.ts",
+    "verify:integration": "tsx scripts/verify-integration.ts",
     "verify:read": "tsx scripts/verify-read.ts",
     "shots": "tsx scripts/shots.ts",
-    "verify": "npm run verify:calldata && npm run verify:write && npm run verify:wallet && npm run verify:wallet-ui"
+    "icons": "python scripts/make-icons.py",
+    "verify": "npm run verify:calldata && npm run verify:write && npm run verify:wallet && npm run verify:wallet-ui && npm run verify:client && npm run verify:schema"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

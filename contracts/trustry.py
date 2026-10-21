@@ -159,6 +159,20 @@ def _addr_key(addr: object) -> str:
     return str(addr)
 
 
+def _as_address(value: object) -> Address:
+    """Bring any address shape into the one the EVM interface expects.
+
+    The value can arrive as an Address, as a hex string, or as an address
+    object of another class, depending on the runtime.
+    """
+    if isinstance(value, Address):
+        return value
+    raw = getattr(value, "as_bytes", None)
+    if isinstance(raw, (bytes, bytearray)):
+        return Address(bytes(raw))
+    return Address(value)
+
+
 # --- EVM interface used to move native tokens out of the contract ---
 @gl.evm.contract_interface
 class _Recipient:
@@ -190,7 +204,13 @@ class NotaryRecord:
     evidence_quote: str
 
 
+@allow_storage
 class Trustry(gl.Contract):
+    # The marker above is redundant on the studio network, where the runtime
+    # marks the class itself, but the local simulator does not. Without it the
+    # contract cannot be deployed locally, and the local network is where the
+    # integration tests run.
+    #
     # Storage fields (class-level annotations only)
     owner: Address
     records: TreeMap[str, NotaryRecord]
@@ -647,9 +667,9 @@ class Trustry(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Contract does not hold the escrow")
 
         # Actually move the native tokens to the recipient.
-        # The address may arrive as a hex string instead of an Address object,
-        # so normalise it before the EVM interface touches it.
-        target = recipient if isinstance(recipient, Address) else Address(recipient)
+        # The address may arrive as a hex string, or as an address object of a
+        # different class, so normalise it before the EVM interface touches it.
+        target = _as_address(recipient)
         _Recipient(target).emit_transfer(value=u256(amount))
 
         depositor_key = _addr_key(record.submitted_by)

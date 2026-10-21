@@ -49,7 +49,7 @@ ai-notary/
 - Implement contract skeleton with pinned runner.
 
 ## Deployment & Testing (Verified on studionet)
-- **Contract address (studionet, current)**: `0xd71227403E81BcDC4f0Fa657661687D2773333B0`
+- **Contract address (studionet, current)**: `0xf322db27dceD1AF28Db33756dff7f4D99205dA98`
   - earlier builds: `0xcf2Ae53f11116Fbf0121990678E4DB513f44dd8d` (v3), `0x175149bE360fbB49D2C216eB26428693D53017A7`, `0xC100045acb98a280e58880C270169BD4C474523a` (v2 with escrow), `0x26400588CF33a28B270bB177D3fC9bAe917d8F2C`, `0x8afB142f503111f84103570bc21E04f103052993` (escrow v1), `0x8Cf3165E5490b982b5e14F3f7d80D349fcCC76E1` (first build, escrow was a stub)
 - **Wallet**: `tester1` from `D:\Genlayer-project\weels\wallet` (`tester1-keystore.json` + `tester1.password`)
 - **Deploy route**: `python "D:\Genlayer-project\weels\wallet\deploy.py" --contract contracts/trustry.py --wallet tester1`
@@ -128,6 +128,59 @@ Reads: `get_record`, `get_frontend_details`, `get_all_record_ids`, `get_escrow_s
 
 ## Trusted Domains (verified reachable)
 `github.com`, `twitter.com`, `x.com`, `official`, `reuters.com`, `bloomberg.com`, `cointelegraph.com`, `ethereum.org`, `docs.genlayer.com`
+
+## Testing against a local node (no studio transactions)
+`glsim` is a local GenLayer network. It runs the contract for real, with a real
+consensus round, so the whole stack can be exercised without touching the
+studio network.
+
+```bash
+python run_localnet_test.py      # fresh node, deploy, then drive it from the interface
+```
+
+- The node caches the contract class per process, so **it has to be restarted
+  whenever the contract source changes**. A stale class is the reason a
+  deploy suddenly fails with "class is not marked for usage within storage".
+- The contract class needs `@allow_storage`. The studio runtime marks it
+  itself, the local one does not, and the decorator runs after the class is
+  created, so it cannot help there. With the marker on the class the contract
+  deploys on both.
+- The page and the model can be mocked, so the run is the same every time. The
+  mocks travel in the `sim_config` of the transaction:
+  ```json
+  { "validators": [ { "plugin_config": {
+      "mock_web_response": { "nondet_web_request": { "<url>": { "status": 200, "body": "..." } } },
+      "mock_response": { "response": { "<prompt pattern>": "<the answer>" } } } } ] }
+  ```
+- **The local node does not hand a transaction value to a contract.** It never
+  credits a balance from a transaction, so `gl.message.value` is always 0 and
+  the escrow records nothing. The money actually changing hands is proved on
+  the studio network instead, where the balances are read.
+- The local SDK re-encodes an address argument as `CalldataAddress`, which the
+  runtime does not accept, so a call with an address argument fails there with
+  "not calldata encodable address". The contract normalises the address it is
+  given, which covers the shapes a runtime can hand it.
+
+### The two networks answer in different shapes
+- The studio network calls the transaction state `status_name`, the local one
+  calls it `status`. `receiptStatus()` reads both.
+- The local network may leave the leader receipt entry unmarked, so the entry
+  is found by its mark, or taken as the only one there is.
+- The studio network sends the error text as it is, the local one sends it
+  base64 encoded. The client decodes it, because a person has to be able to
+  read it.
+- The studio network allows 500 requests an hour, then answers with
+  "Rate limit exceeded". A long test run can hit it.
+
+### Checking the interface against the contract
+`verify:schema` reads the schema out of the contract with `genvm-lint` and
+compares it with what the interface expects, which is in
+`frontend/src/lib/genlayer/contract.ts`. A method that is added, renamed or
+changed fails the check instead of failing at runtime.
+
+`verify:client` pins the differences between the two networks, so a change in
+one does not quietly break the other.
+
 
 ## Frontend (Next.js, in `frontend/`)
 - **Stack**: Next.js 16 App Router, React 19, Tailwind v4, shadcn (base-ui), TypeScript, viem.

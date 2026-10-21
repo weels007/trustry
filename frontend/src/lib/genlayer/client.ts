@@ -15,7 +15,6 @@ import {
   type CalldataValue,
 } from "./calldata";
 import { encodeRlpList, toHex } from "./rlp";
-import type { GenLayerChain } from "./chain";
 
 const ADD_TRANSACTION_SIGNATURE =
   "addTransaction(address,address,uint256,uint256,bytes,uint256)";
@@ -63,7 +62,7 @@ export function buildWriteCalldata(
  * write has to be sent for the network to run a consensus round.
  */
 export function buildConsensusTransaction(
-  chain: GenLayerChain,
+  chain: ChainLike,
   sender: `0x${string}`,
   recipient: `0x${string}`,
   method: string,
@@ -86,11 +85,23 @@ export function buildConsensusTransaction(
   return `${ADD_TRANSACTION_SELECTOR}${encoded.slice(2)}` as `0x${string}`;
 }
 
+export type ChainLike = {
+  id: number;
+  name: string;
+  shortName: string;
+  currency: { name: string; symbol: string; decimals: number };
+  rpcUrl: string;
+  explorerUrl: string;
+  consensusMainContract: `0x${string}`;
+  consensusDataContract: `0x${string}`;
+  numInitialValidators: number;
+  maxRotations: number;
+};
+
 export type ReadOptions = {
   from?: `0x${string}`;
   variant?: ReadVariant;
 };
-
 async function rpc<T>(url: string, method: string, params: unknown[]): Promise<T> {
   const response = await fetch(url, {
     method: "POST",
@@ -126,7 +137,7 @@ async function rpc<T>(url: string, method: string, params: unknown[]): Promise<T
 
 /** Call a read only method on an intelligent contract. */
 export async function readContract<T = Record<string, unknown>>(
-  chain: GenLayerChain,
+  chain: ChainLike,
   contract: `0x${string}`,
   method: string,
   args: CalldataValue[] = [],
@@ -167,7 +178,9 @@ export type TransactionStatusName =
 
 export type TransactionReceipt = {
   hash: string;
-  status_name: TransactionStatusName;
+  /** The studio network calls the state `status_name`, the local one `status`. */
+  status_name?: TransactionStatusName;
+  status?: TransactionStatusName;
   result_name?: string;
   value?: string;
   value_credited?: boolean;
@@ -181,9 +194,14 @@ export type TransactionReceipt = {
   };
 };
 
+/** The state a transaction is in, whichever field the network used for it. */
+export function receiptStatus(receipt: TransactionReceipt): TransactionStatusName | undefined {
+  return receipt.status_name ?? receipt.status;
+}
+
 /** Read a transaction the network already knows about. */
 export async function getTransaction(
-  chain: GenLayerChain,
+  chain: ChainLike,
   hash: string,
 ): Promise<TransactionReceipt | null> {
   const result = await rpc<TransactionReceipt | null>(
@@ -206,7 +224,7 @@ export type WaitOptions = {
  * accepted, so the caller has to look at the execution result.
  */
 export async function waitForReceipt(
-  chain: GenLayerChain,
+  chain: ChainLike,
   hash: string,
   options: WaitOptions = {},
 ): Promise<TransactionReceipt> {
@@ -217,11 +235,8 @@ export async function waitForReceipt(
     const receipt = await getTransaction(chain, hash);
     if (receipt) {
       options.onUpdate?.(receipt);
-      if (
-        receipt.status_name === "FINALIZED" ||
-        receipt.status_name === "CANCELED" ||
-        receipt.status_name === "UNDETERMINED"
-      ) {
+      const status = receiptStatus(receipt);
+      if (status === "FINALIZED" || status === "CANCELED" || status === "UNDETERMINED") {
         return receipt;
       }
     }
@@ -249,9 +264,36 @@ export type ExecutionOutcome = {
  * network accepted the transaction, so the execution result has to be read
  * out of the leader receipt.
  */
+/**
+ * Read a message the network sent back.
+ *
+ * The studio network sends the error text as it is, the local one sends it
+ * base64 encoded. A person has to be able to read it either way.
+ */
+function readablePayload(payload: unknown): string {
+  if (typeof payload !== "string") return "";
+  const text = payload.trim();
+  if (!text) return "";
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text) || text.length % 4 !== 0) return text;
+  try {
+    const binary = atob(text);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // Only take the decoded text when it reads like a sentence.
+    const cleaned = decoded.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+    if (cleaned.length > 3 && cleaned.includes(" ")) return cleaned;
+  } catch {
+    // Not base64 after all, the text is fine as it is.
+  }
+  return text;
+}
+
 export function readExecution(receipt: TransactionReceipt): ExecutionOutcome {
   const entries = receipt.consensus_data?.leader_receipt ?? [];
-  const leaderEntry = entries.find((entry) => entry.mode === "leader");
+  // The studio network marks the leader entry, the local one may not.
+  const leaderEntry =
+    entries.find((entry) => entry.mode === "leader") ??
+    (entries.length === 1 ? entries[0] : undefined);
 
   const votes = receipt.consensus_data?.votes ?? {};
   const leader =
@@ -262,33 +304,32 @@ export function readExecution(receipt: TransactionReceipt): ExecutionOutcome {
   }
 
   const execution = String(leaderEntry.execution_result ?? "ERROR");
-  const result = leaderEntry.result as { status?: string; payload?: unknown } | undefined;
-  const payload = result?.payload;
+  const result = leaderEntry.result as
+    | { status?: string; payload?: unknown; readable?: string }
+    | string
+    | undefined;
+  const raw =
+    typeof result === "object" && result !== null
+      ? (result.payload ?? result.readable)
+      : result;
+  const payload = readablePayload(raw);
 
   if (execution !== "SUCCESS") {
     const text =
-      typeof payload === "string"
-        ? payload
-        : "The contract refused the call and the state was rolled back.";
+      payload ||
+      "The contract refused the call and the state was rolled back.";
     return { ok: false, message: text, value: null, votes, leader };
   }
 
   let value: unknown = null;
-  if (payload && typeof payload === "object" && "readable" in payload) {
-    const readable = (payload as { readable?: string }).readable;
-    if (readable) {
-      try {
-        value = JSON.parse(readable);
-      } catch {
-        value = readable;
-      }
-    }
-  } else if (typeof payload === "string") {
+  if (payload.length > 0) {
     try {
       value = JSON.parse(payload);
     } catch {
       value = payload;
     }
+  } else if (raw && typeof raw === "object") {
+    value = raw;
   }
 
   return { ok: true, message: "The contract accepted the call.", value, votes, leader };

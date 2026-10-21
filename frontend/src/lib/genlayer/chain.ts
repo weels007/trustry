@@ -36,7 +36,26 @@ export const STUDIONET = {
 /** The Trustry contract that is live on the studio network. */
 export const TRUSTRY_CONTRACT = (
   process.env.NEXT_PUBLIC_TRUSTRY_CONTRACT ??
-  "0xd71227403E81BcDC4f0Fa657661687D2773333B0"
+  "0xf322db27dceD1AF28Db33756dff7f4D99205dA98"
 ) as `0x${string}`;
 
 export type GenLayerChain = typeof STUDIONET;
+
+/**
+ * A local GenLayer node, used by the integration tests so the whole stack can
+ * be exercised without touching the studio network.
+ */
+export const LOCALNET = {
+  id: 61127,
+  name: "GenLayer Localnet",
+  shortName: "localnet",
+  currency: { name: "GEN", symbol: "GEN", decimals: 18 },
+  rpcUrl: "http://127.0.0.1:4000/api",
+  explorerUrl: "http://127.0.0.1:4000/api",
+  consensusMainContract: "0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575",
+  consensusDataContract: "0x88B0F18613Db92Bf970FfE264E02496e20a74D16",
+  numInitialValidators: 5,
+  maxRotations: 3,
+} as const;
+
+export type LocalChain = typeof LOCALNET;
