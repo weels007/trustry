@@ -17,20 +17,7 @@ WALLET_DIR = Path(r"D:\Genlayer-project\weels\wallet")
 CONTRACT = "0xf322db27dceD1AF28Db33756dff7f4D99205dA98"
 ESCROW_WEI = 10 ** 16  # 0.01 GEN
 
-CANDIDATES = [
-    ("https://docs.genlayer.com/", "GenLayer",
-     "The GenLayer homepage, introducing the GenLayer project and its documentation"),
-    ("https://blog.ethereum.org/", "Ethereum",
-     "The Ethereum blog, publishing an update about Ethereum"),
-    ("https://www.cointelegraph.com/", "Bitcoin",
-     "Cointelegraph news coverage about Bitcoin"),
-    ("https://docs.genlayer.com/developers", "GenLayer",
-     "The GenLayer developers page about building on GenLayer"),
-    ("https://docs.genlayer.com/understand-genlayer-protocol", "GenLayer",
-     "The GenLayer page that explains the GenLayer protocol"),
-    ("https://docs.genlayer.com/developers/intelligent-contracts/introduction", "GenLayer",
-     "The GenLayer introduction to intelligent contracts"),
-]
+from pages import CANDIDATES
 
 PASS, FAIL = [], []
 
@@ -230,13 +217,32 @@ def main() -> int:
     except Exception:
         check("get_record fails for missing event", True)
 
-    # ---------------- WRITE: release_escrow ----------------
-    print("\nWRITE release_escrow")
-    receipt = write("release_escrow", [event_id, account_addr])
-    payload = leader_payload(receipt)
-    print(f"  execution: {execution_result(receipt)}  payload: {payload[:120]}")
-    check("release_escrow succeeded", execution_result(receipt) == "SUCCESS",
-          f"{execution_result(receipt)} {payload[:120]}")
+    # ---------------- WRITE: release_escrow or refund_escrow ----------------
+    # The verdict is the model's opinion, and a real model does not always
+    # answer the same way twice. An attested case is released, an unattested
+    # one is refunded, and both have to work.
+    record = read("get_record", [event_id])
+    attested = record.get("verified") is True
+    print(f"\nWRITE  the validators said: {'attested' if attested else 'not attested'}")
+
+    if attested:
+        print("WRITE release_escrow")
+        receipt = write("release_escrow", [event_id, account_addr])
+        payload = leader_payload(receipt)
+        print(f"  execution: {execution_result(receipt)}  payload: {payload[:120]}")
+        check("release_escrow succeeded", execution_result(receipt) == "SUCCESS",
+              f"{execution_result(receipt)} {payload[:120]}")
+        after = read("get_escrow_status", [event_id])
+        check("the escrow is marked released", after.get("escrow_status") == "released", str(after))
+    else:
+        print("WRITE refund_escrow")
+        receipt = write("refund_escrow", [event_id])
+        payload = leader_payload(receipt)
+        print(f"  execution: {execution_result(receipt)}  payload: {payload[:120]}")
+        check("refund_escrow succeeded", execution_result(receipt) == "SUCCESS",
+              f"{execution_result(receipt)} {payload[:120]}")
+        after = read("get_escrow_status", [event_id])
+        check("the escrow is marked refunded", after.get("escrow_status") == "refunded", str(after))
 
     # ---------------- WRITE: release_escrow (unknown event) ----------------
     print("\nWRITE release_escrow (unknown event -> must fail)")

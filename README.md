@@ -12,8 +12,8 @@ The repository holds the intelligent contract and the interface that goes with i
 | Network | Genlayer Studio Network, chain 61999 |
 | Contract methods | 15, of which 9 are reads |
 | Direct tests | 48 passed |
-| Studio network tests | 39 passed |
-| Escrow tests | 31 passed |
+| Studio network tests | 40 passed |
+| Escrow tests | 29 passed |
 | Local node integration | 24 passed |
 | Interface checks | 6 suites, all passed |
 
@@ -186,6 +186,14 @@ python test_escrow_studionet.py # the escrow, with on-chain balances
 
 The studio network allows 500 requests an hour, so a long run can hit that
 limit.
+
+Two things are worth knowing about these runs. The verdict is the model's
+opinion, and a real model does not answer the same way twice, so both tests
+follow whichever answer came back: an attested case is released, an unattested
+one is refunded, and the money has to move either way. And a page can only
+certify one event, because the contract reserves it, so every run takes the
+next free page out of `pages.py`. `refund_leftover.py` returns anything a run
+that was cut short left behind.
 
 ---
 ## Deploying

@@ -161,6 +161,24 @@ python run_localnet_test.py      # fresh node, deploy, then drive it from the in
   "not calldata encodable address". The contract normalises the address it is
   given, which covers the shapes a runtime can hand it.
 
+### The studio network, end to end
+- The verdict is the model's opinion, and **a real model does not answer the
+  same way twice**. The same page and the same claim were attested on one run
+  and rejected on the next. A test that insists on `verified == true` is
+  therefore flaky, so both tests follow whichever answer came back: an
+  attested case is released, an unattested one is refunded, and the money has
+  to move either way.
+- The same page can only certify one event, because the contract reserves it.
+  Every run therefore takes the next free page out of `pages.py`. When they
+  are all used, a fresh contract is needed.
+- A failed `open_case` followed by a successful `fund_escrow` leaves an
+  orphan escrow. It is not trapped: `fund_escrow` records the case even when
+  it does not exist yet, so `refund_escrow` can always return the money.
+  `refund_leftover.py` returns anything a cut short run left behind.
+- The studio network allows 500 requests an hour, then answers with
+  "Rate limit exceeded". A long run can hit it, and a run that is cut short
+  leaves an escrow behind.
+
 ### The two networks answer in different shapes
 - The studio network calls the transaction state `status_name`, the local one
   calls it `status`. `receiptStatus()` reads both.
