@@ -8,12 +8,12 @@ The repository holds the intelligent contract and the interface that goes with i
 
 | | |
 |---|---|
-| Contract (studio network) | `0xf322db27dceD1AF28Db33756dff7f4D99205dA98` |
+| Contract (studio network) | `0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4` |
 | Network | Genlayer Studio Network, chain 61999 |
 | Contract methods | 15, of which 9 are reads |
-| Direct tests | 48 passed |
+| Direct tests | 54 passed |
 | Studio network tests | 40 passed |
-| Escrow tests | 29 passed |
+| Escrow tests | 30 passed |
 | Local node integration | 24 passed |
 | Interface checks | 6 suites, all passed |
 
@@ -64,8 +64,9 @@ why funding is a transaction of its own and the risky step carries no value:
 
 - `open_case` and `notarize` are not payable. They do the web fetch and the model call, they
   can fail, and they hold no funds.
-- `fund_escrow` is the only payable method and it has no check that can raise. If the case does
-  not exist it creates one, so the value is always recorded and always refundable.
+- `fund_escrow` is the only payable method and it never rejects a funding that carries value.
+  If the case does not exist yet, it records an orphan case owned by the funder, so the value
+  is always recorded and `refund_escrow` can always return it.
 
 The owner of the contract has no override over anybody's escrow. Only the depositor can move
 the money. The owner may trigger a refund, but the funds always go back to the depositor.
@@ -216,7 +217,7 @@ They are available if the contract moves or a different node is wanted, in
 | Variable | Default |
 |---|---|
 | `NEXT_PUBLIC_GENLAYER_RPC_URL` | `https://studio.genlayer.com/api` |
-| `NEXT_PUBLIC_TRUSTRY_CONTRACT` | `0xf322db27dceD1AF28Db33756dff7f4D99205dA98` |
+| `NEXT_PUBLIC_TRUSTRY_CONTRACT` | `0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4` |
 | `NEXT_PUBLIC_GENLAYER_EXPLORER_URL` | `https://explorer-studio.genlayer.com` |
 
 ### The contract to the studio network

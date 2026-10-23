@@ -5,7 +5,7 @@ import json
 import urllib.request
 
 RPC = "https://studio.genlayer.com/api"
-CONTRACT = "0xd71227403E81BcDC4f0Fa657661687D2773333B0"
+CONTRACT = "0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4"
 
 ORIGINS = [
     "https://trustry.vercel.app",

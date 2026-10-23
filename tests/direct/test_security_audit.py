@@ -42,7 +42,6 @@ def test_protection_url_variants_are_blocked(direct_vm, direct_deploy, direct_al
     for index, variant in enumerate((
         "https://github.com/test/release?ref=main",
         "https://github.com/test/release#frag",
-        "http://github.com/test/release",
         "https://GitHub.com/test/release/",
     )):
         with direct_vm.expect_revert("already notarized"):
@@ -113,7 +112,7 @@ def test_protection_owner_cannot_release_another_users_escrow(direct_vm, direct_
     contract.notarize("evt_owner")
 
     direct_vm.sender = direct_alice
-    with direct_vm.expect_revert("depositor"):
+    with direct_vm.expect_revert("funder"):
         contract.release_escrow("evt_owner", direct_alice)
     direct_vm.sender = direct_alice
 
@@ -188,21 +187,25 @@ def test_protection_a_rejected_event_can_be_appealed(direct_vm, direct_deploy, d
     assert contract.get_record("evt_appeal")["appeal_count"] == 1
 
 
-def test_protection_funding_never_fails_so_funds_cannot_be_trapped(direct_vm, direct_deploy, direct_alice):
-    """A failed payable call is still credited with the value.
-
-    That is why funding is a separate, non-failing step and the risky
-    verification never carries a value. This test locks that separation in.
-    """
+def test_protection_funding_never_traps_value(direct_vm, direct_deploy, direct_alice):
+    """A failed payable call keeps its value, so funding an unknown case must
+    create a refundable orphan instead of raising."""
     contract = _deploy(direct_vm, direct_deploy, direct_alice)
     direct_vm.value = 10 ** 16
-    # The case does not exist. The call still succeeds and the funds are held.
-    contract.fund_escrow("evt_unknown")
+    result = contract.fund_escrow("evt_unknown")
     direct_vm.value = 0
-    status = contract.get_escrow_status("evt_unknown")
-    assert status["escrow_wei"] == 10 ** 16
-    assert status["escrow_status"] == "held"
-    assert int(contract.get_total_escrow_held()) == 10 ** 16
+    assert result["escrow_status"] == "held"
+    assert contract.refund_escrow("evt_unknown") is True
+    assert contract.get_escrow_status("evt_unknown")["escrow_status"] == "refunded"
+    assert int(contract.get_total_escrow_held()) == 0
+
+
+def test_protection_funding_without_value_and_without_a_case_fails(direct_vm, direct_deploy, direct_alice):
+    """Zero-value funding of an unknown case is still refused."""
+    contract = _deploy(direct_vm, direct_deploy, direct_alice)
+    with direct_vm.expect_revert("not found"):
+        contract.fund_escrow("evt_unknown")
+    assert len(contract.get_all_record_ids()) == 0
 
 
 def test_protection_notarize_carries_no_value(direct_vm, direct_deploy, direct_alice):
@@ -216,3 +219,41 @@ def test_protection_notarize_carries_no_value(direct_vm, direct_deploy, direct_a
         contract.notarize("evt_nov")
     # The case is untouched and still refundable.
     assert contract.get_record("evt_nov")["state"] == "pending"
+
+def test_protection_funder_not_submitter_controls_escrow(direct_vm, direct_deploy, direct_alice, direct_bob):
+    """A third party that funds the case is the funder, not the submitter."""
+    contract = _deploy(direct_vm, direct_deploy, direct_alice)
+
+    direct_vm.sender = direct_bob
+    _open(contract, "evt_funder", description="A launch happened", url=URL, phrase=TITLE)
+    direct_vm.sender = direct_alice
+    direct_vm.value = 10 ** 16
+    contract.fund_escrow("evt_funder")
+    direct_vm.value = 0
+    _mock(direct_vm, f"Title: {TITLE}", {"verified": True, "event_title": TITLE, "reasoning": "ok"})
+    contract.notarize("evt_funder")
+
+    # The submitter who opened the case cannot release a third party's escrow.
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("funder"):
+        contract.release_escrow("evt_funder", direct_alice)
+
+    # The funder can release it.
+    direct_vm.sender = direct_alice
+    assert contract.release_escrow("evt_funder", direct_alice) is True
+
+
+def test_protection_subdomain_of_trusted_domain_is_allowed(direct_vm, direct_deploy, direct_alice):
+    contract = _deploy(direct_vm, direct_deploy, direct_alice)
+    assert contract.is_trusted_domain("https://sub.github.com/test/release") is True
+    assert contract.is_trusted_domain("https://docs.genlayer.com.evil.com/") is False
+    assert contract.is_trusted_domain("https://evil-github.com/test") is False
+
+
+def test_protection_get_frontend_details_exposes_event_description(direct_vm, direct_deploy, direct_alice):
+    contract = _deploy(direct_vm, direct_deploy, direct_alice)
+    _open(contract, "evt_desc", description="The GenLayer homepage describes the project", url=URL, phrase=TITLE)
+    _mock(direct_vm, f"Title: {TITLE}", {"verified": True, "event_title": TITLE, "reasoning": "ok"})
+    contract.notarize("evt_desc")
+    details = contract.get_frontend_details("evt_desc")
+    assert details["event_description"] == "The GenLayer homepage describes the project"

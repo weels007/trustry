@@ -3,6 +3,7 @@ paths:
   artifacts: artifacts/
 
 networks:
+  default: localnet
   localnet: {}
   studionet: {}
   testnet_bradbury: {}

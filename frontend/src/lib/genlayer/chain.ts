@@ -36,7 +36,7 @@ export const STUDIONET = {
 /** The Trustry contract that is live on the studio network. */
 export const TRUSTRY_CONTRACT = (
   process.env.NEXT_PUBLIC_TRUSTRY_CONTRACT ??
-  "0xf322db27dceD1AF28Db33756dff7f4D99205dA98"
+  "0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4"
 ) as `0x${string}`;
 
 export type GenLayerChain = typeof STUDIONET;

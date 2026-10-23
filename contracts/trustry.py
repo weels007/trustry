@@ -134,6 +134,24 @@ def _canonical_url(url: object) -> str:
     return text
 
 
+def _hostname_of(url: object) -> str:
+    """Lowercased host of a URL, without scheme, port, path, query or fragment."""
+    text = str(url).strip().lower()
+    if "://" in text:
+        text = text.split("://", 1)[1]
+    host = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    return host
+
+
+def _host_is_allowed(host: str, domain: str) -> bool:
+    """True for an exact host or a subdomain of an allowed domain."""
+    host = str(host).strip().lower()
+    domain = str(domain).strip().lower()
+    if not host or not domain:
+        return False
+    return host == domain or host.endswith("." + domain)
+
+
 def _addr_key(addr: object) -> str:
     """Normalize an Address into a stable string key for TreeMap storage."""
     as_hex = getattr(addr, "as_hex", None)
@@ -202,6 +220,7 @@ class NotaryRecord:
     appeal_count: u256
     state: str
     evidence_quote: str
+    escrow_funder: Address
 
 
 @allow_storage
@@ -226,9 +245,12 @@ class Trustry(gl.Contract):
 
     # --- Helper: Trusted domain whitelist ---
     def _is_trusted_domain(self, url: str) -> bool:
-        url_lower = str(url).lower()
+        text = str(url).strip().lower()
+        if not text.startswith("https://"):
+            return False
+        host = _hostname_of(url)
         for domain in TRUSTED_DOMAINS:
-            if domain in url_lower:
+            if _host_is_allowed(host, domain):
                 return True
         return False
 
@@ -381,15 +403,12 @@ class Trustry(gl.Contract):
             if str(leader_data.get("source_domain", "")) != str(validator_result.get("source_domain", "")):
                 return False
 
-            # When both sides found the anchor, the reported titles must match.
+            # When both sides found the anchor, the verdict has to agree. The
+            # title and the quote are independent evidence, so each side has to
+            # ground its own answer on the page; separately grounded answers may
+            # name different headlines or quotes.
             if bool(leader_data.get("anchor_found")):
-                leader_title = _normalize_text(leader_data.get("event_title", ""))
-                validator_title = _normalize_text(validator_result.get("event_title", ""))
-                if leader_title != validator_title:
-                    return False
-                leader_quote = _normalize_text(leader_data.get("evidence_quote", ""))
-                validator_quote = _normalize_text(validator_result.get("evidence_quote", ""))
-                if leader_quote != validator_quote:
+                if not bool(leader_data.get("grounded")) or not bool(validator_result.get("grounded")):
                     return False
 
             return True
@@ -411,8 +430,8 @@ class Trustry(gl.Contract):
         credits the contract with the value, so a payable method that can fail
         would trap the funds of the sender.
         """
-        if not str(evidence_url).startswith("http"):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Evidence URL must be HTTP/HTTPS")
+        if not str(evidence_url).startswith("https://"):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Evidence URL must be HTTPS")
         if not self._is_trusted_domain(evidence_url):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Untrusted evidence domain: {evidence_url}")
         if event_id == "" or event_description == "":
@@ -456,6 +475,7 @@ class Trustry(gl.Contract):
             appeal_count=0,
             state=STATE_PENDING,
             evidence_quote="",
+            escrow_funder=gl.message.sender_address,
 
             )
         self.record_ids.append(event_id)
@@ -469,57 +489,62 @@ class Trustry(gl.Contract):
     def fund_escrow(self, event_id: str) -> dict:
         """Attach GEN to a case as an escrow.
 
-        This method has no check that can raise. A failed payable call is still
-        credited with the value, so a rejection here would leave the funds in
-        the contract with no record to refund them from.
+        A failed payable call still credits the contract with the value: the
+        storage is rolled back but the GEN is not returned, so it would sit in
+        the contract with no record to refund it from. This method therefore
+        never raises when it carries value. A funding that arrives before
+        open_case creates the case as an orphan record owned by the funder,
+        which refund_escrow can always return.
         """
         value = int(gl.message.value)
-        sender_key = _addr_key(gl.message.sender_address)
+        sender = gl.message.sender_address
+        sender_key = _addr_key(sender)
 
         record = self.records.get(event_id)
         if record is None:
-            # Create the case rather than reject the call, so the funds are
-            # always refundable.
-            self.records[event_id] = NotaryRecord(
-                event_id=str(event_id)[:MAX_INPUT_LENGTH],
+            if value <= 0:
+                raise gl.vm.UserError(f"{ERROR_EXPECTED} Event {event_id} not found; open a case first")
+            record = NotaryRecord(
+                event_id=event_id,
                 event_title="",
                 evidence_url="",
                 source_domain="",
                 verified=False,
                 verified_at="",
-                submitted_by=gl.message.sender_address,
-                escrow_wei=u256(value),
-                escrow_status=ESCROW_HELD if value > 0 else ESCROW_NONE,
+                submitted_by=sender,
+                escrow_wei=u256(0),
+                escrow_status=ESCROW_NONE,
                 event_description="",
                 expected_event_title="",
                 canonical_url="",
                 appeal_count=0,
                 state=STATE_PENDING,
                 evidence_quote="",
-
+                escrow_funder=sender,
             )
             self.record_ids.append(event_id)
-            self.event_counts[sender_key] = int(self.event_counts.get(sender_key, 0)) + 1
-        else:
-            held = int(record.escrow_wei)
-            self.records[event_id] = NotaryRecord(
-                event_id=str(record.event_id),
-                event_title=str(record.event_title),
-                evidence_url=str(record.evidence_url),
-                source_domain=str(record.source_domain),
-                verified=bool(record.verified),
-                verified_at=str(record.verified_at),
-                submitted_by=record.submitted_by,
-                escrow_wei=u256(held + value),
-                escrow_status=ESCROW_HELD if (held + value) > 0 else ESCROW_NONE,
-                event_description=str(record.event_description),
-                expected_event_title=str(record.expected_event_title),
-                canonical_url=str(record.canonical_url),
-                appeal_count=int(record.appeal_count),
-                state=str(record.state),
-                evidence_quote=str(record.evidence_quote),
 
-            )
+        held = int(record.escrow_wei)
+        funder = gl.message.sender_address if held == 0 else record.escrow_funder
+        self.records[event_id] = NotaryRecord(
+            event_id=str(record.event_id),
+            event_title=str(record.event_title),
+            evidence_url=str(record.evidence_url),
+            source_domain=str(record.source_domain),
+            verified=bool(record.verified),
+            verified_at=str(record.verified_at),
+            submitted_by=record.submitted_by,
+            escrow_wei=u256(held + value),
+            escrow_status=ESCROW_HELD if (held + value) > 0 else ESCROW_NONE,
+            event_description=str(record.event_description),
+            expected_event_title=str(record.expected_event_title),
+            canonical_url=str(record.canonical_url),
+            appeal_count=int(record.appeal_count),
+            state=str(record.state),
+            evidence_quote=str(record.evidence_quote),
+            escrow_funder=funder,
+
+        )
 
         if value > 0:
             self.escrow_pool[sender_key] = int(self.escrow_pool.get(sender_key, 0)) + value
@@ -570,6 +595,7 @@ class Trustry(gl.Contract):
             appeal_count=int(record.appeal_count),
             state=STATE_VERIFIED if verified else STATE_REJECTED,
             evidence_quote=str(result.get("evidence_quote", "")),
+            escrow_funder=record.escrow_funder,
 
         )
 
@@ -592,7 +618,7 @@ class Trustry(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Event {event_id} is {record.state}, not rejected")
         if str(record.escrow_status) == ESCROW_RELEASED:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Escrow already released for {event_id}")
-        if record.submitted_by != gl.message.sender_address and self.owner != gl.message.sender_address:
+        if _addr_key(record.escrow_funder) != _addr_key(gl.message.sender_address) and self.owner != gl.message.sender_address:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Not authorized to appeal this event")
 
         # The evidence may have been published after the first attempt, so the
@@ -625,6 +651,7 @@ class Trustry(gl.Contract):
             canonical_url=str(record.canonical_url),
             appeal_count=appeal_count,
             state=STATE_VERIFIED if verified else STATE_REJECTED,
+            escrow_funder=record.escrow_funder,
             evidence_quote=str(result.get("evidence_quote", "")),
 
         )
@@ -648,10 +675,10 @@ class Trustry(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Escrow already released for {event_id}")
         if str(record.escrow_status) == ESCROW_REFUNDED:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Escrow already refunded for {event_id}")
-        # Only the depositor can move the money. The owner has no override,
+        # Only the funder can move the money. The owner has no override,
         # otherwise the owner could take anybody's escrow.
-        if record.submitted_by != gl.message.sender_address:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the depositor can release this escrow")
+        if _addr_key(record.escrow_funder) != _addr_key(gl.message.sender_address):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the funder can release this escrow")
 
         amount = int(record.escrow_wei)
         if amount <= 0:
@@ -672,9 +699,9 @@ class Trustry(gl.Contract):
         target = _as_address(recipient)
         _Recipient(target).emit_transfer(value=u256(amount))
 
-        depositor_key = _addr_key(record.submitted_by)
-        pool_now = int(self.escrow_pool.get(depositor_key, 0))
-        self.escrow_pool[depositor_key] = pool_now - amount if pool_now >= amount else 0
+        funder_key = _addr_key(record.escrow_funder)
+        pool_now = int(self.escrow_pool.get(funder_key, 0))
+        self.escrow_pool[funder_key] = pool_now - amount if pool_now >= amount else 0
         self.total_escrow_held = int(self.total_escrow_held) - amount
 
         # Reassign the whole record so the state change is persisted.
@@ -694,6 +721,7 @@ class Trustry(gl.Contract):
             appeal_count=int(record.appeal_count),
             state=str(record.state),
             evidence_quote=str(record.evidence_quote),
+            escrow_funder=record.escrow_funder,
 
             )
         return True
@@ -710,9 +738,9 @@ class Trustry(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Escrow already released for {event_id}")
         if str(record.escrow_status) == ESCROW_REFUNDED:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Escrow already refunded for {event_id}")
-        # The owner may trigger a refund, but the money always goes back to
-        # the depositor, so this is not a way to take anybody's money.
-        if record.submitted_by != gl.message.sender_address and self.owner != gl.message.sender_address:
+        # The owner may trigger a refund, but the money always goes back to the
+        # funder, so this is not a way to take anybody's money.
+        if _addr_key(record.escrow_funder) != _addr_key(gl.message.sender_address) and self.owner != gl.message.sender_address:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Not authorized to refund escrow")
 
         amount = int(record.escrow_wei)
@@ -725,12 +753,12 @@ class Trustry(gl.Contract):
         if contract_balance > 0 and contract_balance < amount:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Contract does not hold the escrow")
 
-        # Move the native tokens back to the submitter.
-        _Recipient(record.submitted_by).emit_transfer(value=u256(amount))
+        # Move the native tokens back to the funder.
+        _Recipient(record.escrow_funder).emit_transfer(value=u256(amount))
 
-        depositor_key = _addr_key(record.submitted_by)
-        pool_now = int(self.escrow_pool.get(depositor_key, 0))
-        self.escrow_pool[depositor_key] = pool_now - amount if pool_now >= amount else 0
+        funder_key = _addr_key(record.escrow_funder)
+        pool_now = int(self.escrow_pool.get(funder_key, 0))
+        self.escrow_pool[funder_key] = pool_now - amount if pool_now >= amount else 0
         self.total_escrow_held = int(self.total_escrow_held) - amount
 
         self.records[event_id] = NotaryRecord(
@@ -749,6 +777,7 @@ class Trustry(gl.Contract):
             appeal_count=int(record.appeal_count),
             state=str(record.state),
             evidence_quote=str(record.evidence_quote),
+            escrow_funder=record.escrow_funder,
 
             )
         return True
@@ -788,7 +817,7 @@ class Trustry(gl.Contract):
         return {
             "event_id": r.event_id,
             "event_title": r.event_title,
-            "description": str(r.event_description),
+            "event_description": str(r.event_description),
             "verified": verified,
             "verified_at": r.verified_at,
             "state": r.state,

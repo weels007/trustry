@@ -49,17 +49,17 @@ ai-notary/
 - Implement contract skeleton with pinned runner.
 
 ## Deployment & Testing (Verified on studionet)
-- **Contract address (studionet, current)**: `0xf322db27dceD1AF28Db33756dff7f4D99205dA98`
-  - earlier builds: `0xcf2Ae53f11116Fbf0121990678E4DB513f44dd8d` (v3), `0x175149bE360fbB49D2C216eB26428693D53017A7`, `0xC100045acb98a280e58880C270169BD4C474523a` (v2 with escrow), `0x26400588CF33a28B270bB177D3fC9bAe917d8F2C`, `0x8afB142f503111f84103570bc21E04f103052993` (escrow v1), `0x8Cf3165E5490b982b5e14F3f7d80D349fcCC76E1` (first build, escrow was a stub)
+- **Contract address (studionet, current)**: `0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4` (deployer `tester1` `0xE8b3e800d08727D25156a44cD1609F793bd0Af5a`)
+  - earlier builds: `0x85F97A7E33D9508aEA5ED476055429B79c917AB2` (steward-fixed, burned 0.011 GEN on value trap), `0xB0995a6C0Fe4168cc0961Fc9CDE96C07c1170230` (steward-fixed), `0xf322db27dceD1AF28Db33756dff7f4D99205dA98`, `0xcf2Ae53f11116Fbf0121990678E4DB513f44dd8d` (v3), `0x175149bE360fbB49D2C216eB26428693D53017A7`, `0xC100045acb98a280e58880C270169BD4C474523a` (v2 with escrow), `0x26400588CF33a28B270bB177D3fC9bAe917d8F2C`, `0x8afB142f503111f84103570bc21E04f103052993` (escrow v1), `0x8Cf3165E5490b982b5e14F3f7d80D349fcCC76E1` (first build, escrow was a stub)
 - **Wallet**: `tester1` from `D:\Genlayer-project\weels\wallet` (`tester1-keystore.json` + `tester1.password`)
 - **Deploy route**: `python "D:\Genlayer-project\weels\wallet\deploy.py" --contract contracts/trustry.py --wallet tester1`
   - The GenLayer CLI cannot be piped: it reads the keystore password with `inquirer`, which needs a real TTY.
   - `deploy.py` decrypts the keystore with `eth_account` and deploys with `genlayer-py`. No prompt, no key copy, no password on a command line.
   - CLI fallback (needs a keystore copy in `~/.genlayer/keystores`): `account import --source-password <pw> --password <pw>` → `account unlock --account <n> --password <pw>` → `account use <n>` → `contracts deploy --contract <path> --rpc https://studio.genlayer.com/api` → `account lock` + `account remove --force`.
 - **Real studionet tests**:
-  - `python test_studionet.py` — 39 checks, every read and write method, real web + LLM consensus.
-  - `python test_escrow_studionet.py` — 31 checks that prove the GEN actually moves, by reading on-chain balances of the depositor, the recipient and the contract.
-- **Direct tests**: `pytest tests/direct/` — 48 passed (33 behaviour + 15 security regression).
+  - `python test_studionet.py` — 40 checks, every read and write method, real web + LLM consensus.
+  - `python test_escrow_studionet.py` — 30 checks that prove the GEN actually moves, by reading on-chain balances of the depositor, the recipient and the contract.
+- **Direct tests**: `pytest tests/direct/` — 54 passed (36 behaviour + 18 security regression).
 
 ### Contract API (v3, funding separated from risk)
 ```
@@ -87,7 +87,7 @@ Reads: `get_record`, `get_frontend_details`, `get_all_record_ids`, `get_escrow_s
 - A transaction that fails **still credits the contract with the value**. The receipt shows `value_credited: True` even when `execution_result` is `ERROR`, and the GEN is never returned. The storage is rolled back, so there is no record to refund from.
 - Therefore **no method that can fail may carry a value**. The contract separates the two:
   - `open_case` and `notarize` are not payable. They do the web fetch and the LLM call, and they can fail, but they hold no funds.
-  - `fund_escrow` is the only payable method, and it has **no check that can raise**. If the case does not exist it creates one, so the funds are always recorded and always refundable.
+  - `fund_escrow` is the only payable method, and it **never rejects a funding that carries value**. If the case does not exist yet it records an orphan case owned by the funder, so the funds are always recorded and always refundable. Zero-value funding of an unknown case is still refused.
 - Keep the invariant `contract balance == total_escrow_held`. `get_total_escrow_held` and `get_contract_balance` expose both sides, and `release_escrow` / `refund_escrow` refuse to pay out when the contract does not hold the money.
 
 ### Escrow rules that matter
@@ -174,6 +174,8 @@ python run_localnet_test.py      # fresh node, deploy, then drive it from the in
 - A failed `open_case` followed by a successful `fund_escrow` leaves an
   orphan escrow. It is not trapped: `fund_escrow` records the case even when
   it does not exist yet, so `refund_escrow` can always return the money.
+  The same holds when funding arrives before `open_case` at all — the orphan
+  record is owned by the funder.
   `refund_leftover.py` returns anything a cut short run left behind.
 - The studio network allows 500 requests an hour, then answers with
   "Rate limit exceeded". A long run can hit it, and a run that is cut short

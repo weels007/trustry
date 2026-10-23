@@ -115,7 +115,7 @@ def test_open_case_untrusted_domain_fails(direct_vm, direct_deploy, direct_alice
 
 def test_open_case_bad_url_scheme_fails(direct_vm, direct_deploy, direct_alice):
     contract = _deploy_fresh(direct_vm, direct_deploy, direct_alice)
-    with direct_vm.expect_revert("HTTP"):
+    with direct_vm.expect_revert("HTTPS"):
         _open(contract, "evt_bad", url="ftp://github.com/test")
 
 
@@ -224,11 +224,16 @@ def test_url_variants_are_blocked(direct_vm, direct_deploy, direct_alice):
     for index, variant in enumerate((
         "https://github.com/test/release?ref=main",
         "https://github.com/test/release#frag",
-        "http://github.com/test/release",
         "https://GitHub.com/test/release/",
     )):
         with direct_vm.expect_revert("already notarized"):
             _open(contract, f"evt_v{index}", url=variant)
+
+
+def test_open_case_requires_https(direct_vm, direct_deploy, direct_alice):
+    contract = _deploy_fresh(direct_vm, direct_deploy, direct_alice)
+    with direct_vm.expect_revert("HTTPS"):
+        _open(contract, "evt_http", url="http://github.com/test/release")
 
 
 def test_event_count_is_capped(direct_vm, direct_deploy, direct_alice):
@@ -261,16 +266,30 @@ def test_fund_escrow_records_the_deposit(direct_vm, direct_deploy, direct_alice)
     assert int(contract.get_total_escrow_held()) == ESCROW_WEI
 
 
-def test_fund_escrow_never_fails_so_funds_cannot_be_trapped(direct_vm, direct_deploy, direct_alice):
-    """fund_escrow has no raising check, so a value is always recorded."""
+def test_fund_escrow_without_a_case_creates_a_refundable_orphan(direct_vm, direct_deploy, direct_alice):
+    """A payable call that fails still keeps its value, so funding an unknown
+    case must not raise. It becomes an orphan record the funder can refund."""
     contract = _deploy_fresh(direct_vm, direct_deploy, direct_alice)
-    # The case does not exist. The call still succeeds and the funds are held.
     direct_vm.value = ESCROW_WEI
-    contract.fund_escrow("evt_unknown")
+    result = contract.fund_escrow("evt_orphan")
     direct_vm.value = 0
-    status = contract.get_escrow_status("evt_unknown")
+    assert result["escrow_wei"] == ESCROW_WEI
+    assert result["escrow_status"] == "held"
+    status = contract.get_escrow_status("evt_orphan")
     assert status["escrow_wei"] == ESCROW_WEI
-    assert status["escrow_status"] == "held"
+    assert int(contract.get_total_escrow_held()) == ESCROW_WEI
+    assert contract.refund_escrow("evt_orphan") is True
+    assert contract.get_escrow_status("evt_orphan")["escrow_status"] == "refunded"
+    assert int(contract.get_total_escrow_held()) == 0
+
+
+def test_fund_escrow_without_value_and_without_a_case_fails(direct_vm, direct_deploy, direct_alice):
+    """Zero-value funding of an unknown case is still refused: there is no
+    value to protect, and the case was never opened."""
+    contract = _deploy_fresh(direct_vm, direct_deploy, direct_alice)
+    with direct_vm.expect_revert("not found"):
+        contract.fund_escrow("evt_unknown")
+    assert len(contract.get_all_record_ids()) == 0
 
 
 def test_release_escrow_moves_funds(direct_vm, direct_deploy, direct_alice, direct_bob):
@@ -333,7 +352,7 @@ def test_release_escrow_unauthorized_fails(direct_vm, direct_deploy, direct_alic
     direct_vm.clear_mocks()
 
     direct_vm.sender = direct_bob
-    with direct_vm.expect_revert("depositor"):
+    with direct_vm.expect_revert("funder"):
         contract.release_escrow("evt_unauth", direct_bob)
     direct_vm.sender = direct_alice
 
@@ -351,7 +370,7 @@ def test_owner_cannot_release_another_users_escrow(direct_vm, direct_deploy, dir
     direct_vm.clear_mocks()
 
     direct_vm.sender = direct_alice
-    with direct_vm.expect_revert("depositor"):
+    with direct_vm.expect_revert("funder"):
         contract.release_escrow("evt_owner", direct_alice)
     direct_vm.sender = direct_alice
 

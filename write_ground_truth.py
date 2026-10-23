@@ -11,7 +11,7 @@ from genlayer_py.contracts.utils import make_calldata_object
 from genlayer_py.types import CalldataAddress
 
 SENDER = "0xE8b3e800d08727D25156a44cD1609F793bd0Af5a"
-RECIPIENT = "0xf322db27dceD1AF28Db33756dff7f4D99205dA98"
+RECIPIENT = "0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4"
 CONTRACT = "0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575"
 
 CASES = [

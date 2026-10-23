@@ -16,7 +16,7 @@ const groundTruth = JSON.parse(
 ) as GroundTruth;
 
 const SENDER = "0xE8b3e800d08727D25156a44cD1609F793bd0Af5a";
-const RECIPIENT = "0xf322db27dceD1AF28Db33756dff7f4D99205dA98";
+const RECIPIENT = "0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4";
 
 let failures = 0;
 

@@ -7,7 +7,7 @@ from eth_account import Account
 from genlayer_py import create_client, studionet
 
 WALLET_DIR = Path(r"D:\Genlayer-project\weels\wallet")
-CONTRACT = "0xf322db27dceD1AF28Db33756dff7f4D99205dA98"
+CONTRACT = "0x18207BFEF02C1e00Dd2BA6D746FbbeB84A22C1A4"
 
 data = json.loads((WALLET_DIR / "tester1-keystore.json").read_text(encoding="utf-8"))
 password = (WALLET_DIR / "tester1.password").read_text(encoding="utf-8").strip()
